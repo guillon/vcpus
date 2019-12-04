@@ -43,10 +43,17 @@ The command executed without argument may be used as a replacement for the
 
 # Installation
 
-Install for instance in user environment (``~/.local/bin``) with:
+Download the self contained ``vcpus`` python script from the releases page: https://github.com/guillon/repo-mirror/releases
+For instance doewnload ``v1.0.1`` version with:
+
+    curl -L -o vcpus  https://github.com/guillon/vcpus/releases/download/v1.0.1/vcpus
+    chmod +x vcpus
+    ./vcpus --help
+
+Or install with setup tools, for instance in user environment (``~/.local/bin``) with:
 
     ./setup.py install --user
-
+    vcpus --help
 
 # Licence
 
