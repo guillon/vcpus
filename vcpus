@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+#
+# This is free and unencumbered software released into the public domain.
+#
+# Anyone is free to copy, modify, publish, use, compile, sell, or
+# distribute this software, either in source code form or as a compiled
+# binary, for any purpose, commercial or non-commercial, and by any
+# means.
+#
+# In jurisdictions that recognize copyright laws, the author or authors
+# of this software dedicate any and all copyright interest in the
+# software to the public domain. We make this dedication for the benefit
+# of the public at large and to the detriment of our heirs and
+# successors. We intend this dedication to be an overt act of
+# relinquishment in perpetuity of all present and future rights to this
+# software under copyright law.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+# OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+# ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+# OTHER DEALINGS IN THE SOFTWARE.
+#
+# For more information, please refer to <http://unlicense.org/>
+#
+
+
+from __future__ import print_function
+import sys
+
+# Fail early if python version is not supported
+def check_python_version():
+    try:
+        assert sys.hexversion >= 0x02060000
+    except: # pragma: no cover
+        sys.stderr.write('%s: error: python version >= 2.6 is required\n' % NAME)
+        sys.exit(1)
+check_python_version()
+
+import multiprocessing
+import logging
+import argparse
+
+NAME = 'vcpus'
+VERSION = '1.0.1'
+
+def get_nprocs():
+    try:
+        nprocs = multiprocessing.cpu_count()
+    except Exception as e:
+        return 0
+    return nprocs
+
+def get_cpuset_count():
+    def generate_list(inlist):
+        def generate_from_pair(inpair):
+            pair = inpair.strip().split('-')
+            if len(pair) > 0:
+                for x in range(int(pair[0]), int(pair[1])+1):
+                    yield x
+            else:
+                yield int(pair[0])
+        for pair in inlist.strip().split(','):
+            for x in generate_from_pair(pair):
+                yield x
+
+    fname = "/sys/fs/cgroup/cpuset/cpuset.cpus"
+    try:
+        with open(fname) as f:
+            cpuset = f.read().strip()
+    except Exception as e:
+        logger.debug("can't read cpu set from %s" % fname)
+        return 0
+    cpuset_count = sum(1 for _ in generate_list(cpuset))
+    logger.debug("cpuset.cpus: %s" % cpuset)
+    logger.debug("cpuset_count: %s" % cpuset_count)
+    return cpuset_count
+
+def get_cpushares_count():
+    fname = "/sys/fs/cgroup/cpu/cpu.shares"
+    try:
+        with open(fname) as f:
+            cpushares = int(f.read().strip())
+    except Exception as e:
+        logger.debug("can't read cpu shares from %s" % fname)
+        return 0
+    if cpushares <= 1024:
+        logger.debug("cpu.shares <= 1024, assuming not set")
+        cpushares_count = 0
+    else:
+        cpushares_count = (cpushares + 1023) // 1024
+    logger.debug("cpu.shares: %s" % cpushares)
+    logger.debug("cpushares_count: %s" % cpushares_count)
+    return cpushares_count
+
+def get_cpuquota_count():
+    fname = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
+    try:
+        with open(fname) as f:
+            cpuperiod = int(f.read().strip())
+    except Exception as e:
+        logger.debug("can't read cpu period from %s" % fname)
+        return 0
+    fname = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+    try:
+        with open(fname) as f:
+            cpuquota = int(f.read().strip())
+    except Exception as e:
+        logger.debug("can't read cpu quota from %s" % fname)
+        return 0
+    if cpuquota <= 0:
+        logger.debug("cpu.cfs_quota_us <= 0, assuming not set")
+        cpuquota_count = 0
+    elif cpuperiod <= 0:
+        logger.debug("cpu.cfs_period_us <= 0, assuming not set")
+        cpuquota_count = 0
+    else:
+        cpuquota_count = (cpuquota + cpuperiod - 1) // cpuperiod
+    logger.debug("cpu.cfs_quota_us: %s" % cpuquota)
+    logger.debug("cpu.cfs_period_us: %s" % cpuperiod)
+    logger.debug("cpuquota_count: %s" % cpuquota_count)
+    return cpuquota_count
+
+def version():
+    print("%s version %s" % (NAME, VERSION))
+
+def run():
+    parser = argparse.ArgumentParser(description='Estimate the number available cpus.')
+    parser.add_argument('--allocated', action='store_true',
+                        help='estimate from minimum of available set, allocated shares and quota (this is the default)')
+    parser.add_argument('--limit', action='store_true',
+                        help='estimate from minimum of available set and quota')
+    parser.add_argument('--nprocs', action='store_true',
+                        help='return the number of cpus as per system config or 0 if not defined')
+    parser.add_argument('--cpu-set', action='store_true',
+                        help='return cpu set cardinality or 0 if not defined')
+    parser.add_argument('--cpu-shares', action='store_true',
+                        help='return cpu shares or 0 if not defined')
+    parser.add_argument('--cpu-quota', action='store_true',
+                        help='return cpu quota or 0 if not defined')
+    parser.add_argument('--debug', action='store_true',
+                        help='activate debugging output')
+    parser.add_argument('--version', action='store_true',
+                    help='output version information')
+    args = parser.parse_args()
+
+    if args.version:
+        version()
+        sys.exit(0)
+
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+
+    cpu_set = get_cpuset_count()
+    cpu_shares = get_cpushares_count()
+    cpu_quota = get_cpuquota_count()
+    nprocs = get_nprocs()
+
+    if args.cpu_set:
+        ncpus = cpu_set
+    elif args.cpu_shares:
+        ncpus = cpu_shares
+    elif args.cpu_quota:
+        ncpus = cpu_quota
+    elif args.nprocs:
+        ncpus = nprocs
+    elif args.limit:
+        ncpus = min(x for x in (cpu_set, cpu_quota, nprocs, 1024) if x > 0)
+    else:
+        ncpus = min(x for x in (cpu_set, cpu_shares, cpu_quota, nprocs, 1024) if x > 0)
+    print(ncpus)
+
+if __name__ == '__main__':
+    logging.basicConfig()
+    logger = logging.getLogger(NAME)
+    run()
